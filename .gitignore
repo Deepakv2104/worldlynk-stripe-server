@@ -1,6 +1,12 @@
-*.env
-*.env.example
-*.env.local
-*.env.staging
-/node_modules
-/vars
+# Ignore the .env file
+.env
+
+# Node modules directory
+node_modules/
+
+# Log files
+*.log
+
+# Build directories
+/build
+/dist
