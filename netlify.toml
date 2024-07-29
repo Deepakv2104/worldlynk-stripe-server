@@ -1,3 +1,10 @@
 [build]
   publish = "public"
   functions = "src/functions"
+
+# Apply the timeout to the specific function
+[functions]
+  directory = "src/functions"
+
+[functions.stripe-webhook]
+  timeout = 20

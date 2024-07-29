@@ -1,4 +1,3 @@
-require('dotenv').config();
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 
 exports.handler = async (event) => {
@@ -25,15 +24,21 @@ exports.handler = async (event) => {
   }
 
   try {
-    const { tickets } = JSON.parse(event.body);
+    const body = JSON.parse(event.body);
+    const { tickets, user } = body;
 
-    console.log('Received tickets:', tickets); // Log received tickets
+    console.log('Received tickets:', tickets);
+    console.log('Received user details:', user); // Add this line for debugging
+
+    if (!user || !user.email) {
+      throw new Error('User details are missing or incomplete');
+    }
 
     const line_items = tickets.map(ticket => {
-      const unitAmount = (ticket.price + ticket.bookingFee) * 100;
-      console.log(`Calculating unit amount for ${ticket.title}: ${unitAmount} (price: ${ticket.price}, bookingFee: ${ticket.bookingFee})`); // Log calculation
+      const unitAmount = Math.round((ticket.price + ticket.bookingFee) * 100);
+      console.log(`Calculating unit amount for ${ticket.title}: ${unitAmount} (price: ${ticket.price}, bookingFee: ${ticket.bookingFee})`);
       if (isNaN(unitAmount)) {
-        console.error(`Invalid unit amount calculated for ${ticket.title}`);
+        throw new Error(`Invalid unit amount calculated for ${ticket.title}`);
       }
       return {
         price_data: {
@@ -41,19 +46,30 @@ exports.handler = async (event) => {
           product_data: {
             name: ticket.title,
           },
-          unit_amount: unitAmount, // Stripe amount is in cents
+          unit_amount: unitAmount,
         },
         quantity: ticket.quantity,
       };
     });
 
+    console.log('Creating Stripe session with line items:', line_items);
+
     const session = await stripe.checkout.sessions.create({
       payment_method_types: ['card'],
       line_items,
       mode: 'payment',
-      success_url: 'https://worldlynk.co.uk/success', // Your success URL
-      cancel_url: 'https://worldlynk.co.uk/user-dashboard/events', // Your cancel URL
+      customer_email: user.email,
+      metadata: {
+        user_id: user.uid,
+        name: user.name,
+        tickets: JSON.stringify(tickets),
+      },
+      success_url: process.env.SUCCESS_URL,
+      
+      cancel_url: process.env.FAILURE_URL,
     });
+
+    console.log('Stripe session created successfully:', session.id);
 
     return {
       statusCode: 200,
@@ -63,13 +79,14 @@ exports.handler = async (event) => {
       body: JSON.stringify({ id: session.id }),
     };
   } catch (error) {
-    console.error('Error creating Stripe session:', error); // Log Stripe error
+    console.error('Error creating Stripe session:', error);
+
     return {
       statusCode: 500,
       headers: {
         'Access-Control-Allow-Origin': '*',
       },
-      body: JSON.stringify({ error: 'Internal Server Error' }),
+      body: JSON.stringify({ error: 'Internal Server Error', message: error.message }),
     };
   }
 };
