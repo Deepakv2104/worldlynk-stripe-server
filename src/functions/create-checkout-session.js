@@ -30,7 +30,7 @@ exports.handler = async (event) => {
     console.log('Received tickets:', tickets);
     console.log('Received user details:', user); // Add this line for debugging
 
-    if (!user || !user.email) {
+    if (!user.uid || !user.email || !user.name || !user.eventId || !user.eventTitle || !user.eventDate || !user.eventTime || !user.eventLocation) {
       throw new Error('User details are missing or incomplete');
     }
 
@@ -60,15 +60,13 @@ exports.handler = async (event) => {
       mode: 'payment',
       customer_email: user.email,
       metadata: {
-        user_id: user.uid,
-        name: user.name,
+        user: JSON.stringify(user), // Convert user object to JSON string
         tickets: JSON.stringify(tickets),
       },
       success_url: process.env.SUCCESS_URL,
-      
       cancel_url: process.env.FAILURE_URL,
     });
-
+    
     console.log('Stripe session created successfully:', session.id);
 
     return {
