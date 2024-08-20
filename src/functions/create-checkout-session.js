@@ -25,10 +25,11 @@ exports.handler = async (event) => {
 
   try {
     const body = JSON.parse(event.body);
-    const { tickets, user } = body;
+    const { tickets, user, organizerDetails } = body;
 
     console.log('Received tickets:', tickets);
-    console.log('Received user details:', user); // Add this line for debugging
+    console.log('Received user details:', user); // Log user details for debugging
+    console.log('Received organizer details:', organizerDetails); // Log organizer details for debugging
 
     if (!user.uid || !user.email || !user.name || !user.eventId || !user.eventTitle || !user.eventDate || !user.eventTime || !user.eventLocation) {
       throw new Error('User details are missing or incomplete');
@@ -62,11 +63,12 @@ exports.handler = async (event) => {
       metadata: {
         user: JSON.stringify(user), // Convert user object to JSON string
         tickets: JSON.stringify(tickets),
+        organizer: JSON.stringify(organizerDetails), // Include organizer details in metadata
       },
       success_url: process.env.SUCCESS_URL,
       cancel_url: process.env.FAILURE_URL,
     });
-    
+
     console.log('Stripe session created successfully:', session.id);
 
     return {

@@ -5,6 +5,8 @@
 # Apply the timeout to the specific function
 [functions]
   directory = "src/functions"
-
+ 
 [functions.stripe-webhook]
   timeout = 20
+[functions.request-refund]
+  timeout = 30
