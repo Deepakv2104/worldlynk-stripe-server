@@ -39,7 +39,7 @@ console.log(requestId, "this is requestId")
     }
 
     // Check if the sessionId is actually a Payment Intent ID
-    const paymentIntent = await stripe.paymentIntents.retrieve(refundRequest.requestId);
+    const paymentIntent = await stripe.paymentIntents.retrieve(refundRequest.orderId);
     console.log(paymentIntent.id, "paymntintendId")
     const refund = await stripe.refunds.create({
       payment_intent: paymentIntent.id,

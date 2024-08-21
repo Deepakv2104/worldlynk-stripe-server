@@ -2,82 +2,63 @@ const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const { db, admin } = require('./firebase');
 const QRCode = require('qrcode');
 
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'POST, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type, Stripe-Signature',
+};
+
 exports.handler = async (event) => {
   if (event.httpMethod === 'OPTIONS') {
-    return {
-      statusCode: 200,
-      headers: {
-        'Access-Control-Allow-Origin': '*',
-        'Access-Control-Allow-Methods': 'POST, OPTIONS',
-        'Access-Control-Allow-Headers': 'Content-Type, Stripe-Signature',
-      },
-      body: '',
-    };
+    return { statusCode: 200, headers: corsHeaders, body: '' };
   }
 
   if (event.httpMethod !== 'POST') {
-    return {
-      statusCode: 405,
-      headers: {
-        'Access-Control-Allow-Origin': '*',
-      },
-      body: JSON.stringify({ error: 'Method Not Allowed' }),
-    };
+    return { statusCode: 405, headers: corsHeaders, body: JSON.stringify({ error: 'Method Not Allowed' }) };
   }
 
+  try {
+    const stripeEvent = verifyStripeWebhook(event);
+    await processStripeEvent(stripeEvent);
+    return { statusCode: 200, headers: corsHeaders, body: JSON.stringify({ received: true }) };
+  } catch (error) {
+    console.error('Error processing webhook:', error);
+    return { 
+      statusCode: error.statusCode || 500, 
+      headers: corsHeaders, 
+      body: JSON.stringify({ error: error.message || 'Internal Server Error' })
+    };
+  }
+};
+
+function verifyStripeWebhook(event) {
   const sig = event.headers['stripe-signature'];
   const endpointSecret = process.env.STRIPE_WEBHOOK_SECRET;
-
-  let stripeEvent;
-
   try {
-    stripeEvent = stripe.webhooks.constructEvent(event.body, sig, endpointSecret);
-    console.log('Webhook signature verified successfully');
+    return stripe.webhooks.constructEvent(event.body, sig, endpointSecret);
   } catch (err) {
-    console.error('Error verifying webhook signature:', err.message);
-    return {
-      statusCode: 400,
-      headers: {
-        'Access-Control-Allow-Origin': '*',
-      },
-      body: JSON.stringify({ error: 'Invalid signature' }),
-    };
+    console.error('Webhook signature verification failed:', err.message);
+    throw new Error(`Webhook signature verification failed: ${err.message}`);
   }
+}
 
-  console.log('Received Stripe event:', stripeEvent.type);
-
+async function processStripeEvent(stripeEvent) {
   try {
     switch (stripeEvent.type) {
-      case 'payment_intent.succeeded': {
+      case 'payment_intent.succeeded':
         await handlePaymentIntentSucceeded(stripeEvent.data.object);
         break;
-      }
-      case 'checkout.session.completed': {
+      case 'checkout.session.completed':
         await handleCheckoutSessionCompleted(stripeEvent.data.object);
         break;
-      }
       default:
         console.warn(`Unhandled event type: ${stripeEvent.type}`);
     }
   } catch (error) {
-    console.error('Error handling Stripe event:', error);
-    return {
-      statusCode: 500,
-      headers: {
-        'Access-Control-Allow-Origin': '*',
-      },
-      body: JSON.stringify({ error: 'Internal Server Error', message: error.message }),
-    };
+    console.error(`Error processing Stripe event (${stripeEvent.type}):`, error);
+    throw error; // Propagate the error to be caught by the outer try/catch
   }
-
-  return {
-    statusCode: 200,
-    headers: {
-      'Access-Control-Allow-Origin': '*',
-    },
-    body: JSON.stringify({ received: true }),
-  };
-};
+}
 
 async function handlePaymentIntentSucceeded(paymentIntent) {
   console.log(`PaymentIntent for ${paymentIntent.amount} was successful!`);
@@ -90,42 +71,74 @@ async function handlePaymentIntentSucceeded(paymentIntent) {
       limit: 1,
     });
 
-    if (sessions.data.length > 0) {
-      const session = sessions.data[0];
-      console.log('Associated session found:', session.id);
-
-      const { userData, tickets, organizerDetails } = parseSessionMetadata(session.metadata);
-
-      console.log('Parsed Organizer Details:', organizerDetails); // Log the parsed organizer details to check if they are correct
-
-      const qrCodeUrl = await generateQRCodeUrl({
-        id: paymentIntent.id,
-        user: userData.uid,
-        tickets,
-      });
-
-      const paymentData = {
-        id: paymentIntent.id,
-        amount: paymentAmount,
-        currency: paymentIntent.currency,
-        status: paymentIntent.status,
-        created: admin.firestore.Timestamp.fromDate(new Date(paymentIntent.created * 1000)),
-        tickets,
-        user: userData,
-        qrCodeUrl,
-        verified: false,
-        organizerId: organizerDetails.organizerId || '',
-        organizerName: organizerDetails.organizer || '',
-      };
-
-      console.log('Payment Data to be saved:', paymentData); // Log the data before saving
-
-      await saveToFirestore('payments', paymentIntent.id, paymentData);
-    } else {
+    if (sessions.data.length === 0) {
       console.log('No associated session found for this payment intent');
+      return;
     }
+
+    const session = sessions.data[0];
+    console.log('Associated session found:', session.id);
+
+    const { userData, tickets, organizerDetails } = parseSessionMetadata(session.metadata);
+
+    if (!userData || !tickets.length) {
+      throw new Error('Missing user data or tickets information in session metadata.');
+    }
+
+    console.log('Parsed Organizer Details:', organizerDetails);
+
+    const qrCodeUrl = await generateQRCodeUrl({
+      id: paymentIntent.id,
+      user: userData.uid,
+      tickets,
+    });
+
+    const charge = paymentIntent.charges?.data?.[0];
+    const paymentMethodDetails = charge?.payment_method_details?.card;
+
+    const paymentData = {
+      orderId: paymentIntent.id,  
+      amount: paymentAmount,
+      currency: paymentIntent.currency,
+      status: paymentIntent.status,
+      created: admin.firestore.Timestamp.fromDate(new Date(paymentIntent.created * 1000)),
+      tickets: tickets.map(ticket => ({
+        ...ticket,
+        id: generateUniqueTicketId(),
+        status: 'valid'
+      })),
+      user: userData,
+      qrCodeUrl,
+      verified: false,
+      organizerId: organizerDetails.organizerId || '',
+      organizerName: organizerDetails.organizer || '',
+      purchaseDate: admin.firestore.Timestamp.now(),
+      totalAmountPaid: paymentAmount,
+      refund: {
+        status: 'not_refunded',
+        amount: null,
+        date: null
+      },
+      paymentMethod: {
+        last4: paymentMethodDetails?.last4 || '',
+        brand: paymentMethodDetails?.brand || ''
+      },
+      termsVersion: 'v1.0',
+      eventDetails: {
+        eventId: userData.eventId,
+        eventTitle: userData.eventTitle,
+        eventLocation: userData.eventLocation,
+        eventDate: userData.eventDate,
+        eventTime: userData.eventTime
+      }
+    };
+
+    console.log('Payment Data to be saved:', paymentData);
+
+    await saveToFirestore('payments', paymentIntent.id, paymentData);
   } catch (error) {
     console.error('Error processing payment intent:', error);
+    throw error;
   }
 }
 
@@ -135,22 +148,22 @@ async function handleCheckoutSessionCompleted(session) {
   const sessionAmountTotal = session.amount_total / 100;
 
   try {
-    // Parse session metadata
     const { userData, tickets, organizerDetails } = parseSessionMetadata(session.metadata);
 
-    // Log parsed organizer details
+    if (!userData || !tickets.length) {
+      throw new Error('Missing user data or tickets information in session metadata.');
+    }
+
     console.log('Parsed Organizer Details:', organizerDetails);
 
-    // Generate QR Code URL
     const qrCodeUrl = await generateQRCodeUrl({
       id: session.id,
       user: userData.uid,
       tickets,
     });
 
-    // Prepare the data to be saved to Firestore
     const checkoutData = {
-      id: session.id,
+      sessionId: session.id,
       amount_total: sessionAmountTotal,
       currency: session.currency,
       status: session.payment_status,
@@ -166,16 +179,14 @@ async function handleCheckoutSessionCompleted(session) {
       organizerName: organizerDetails.organizer || '',
     };
 
-    // Log the data to be saved
     console.log('Checkout Data to be saved:', checkoutData);
 
-    // Save the data to the 'checkouts' collection
     await saveToFirestore('checkouts', session.id, checkoutData);
   } catch (error) {
     console.error('Error processing checkout session:', error);
+    throw error;
   }
 }
-
 
 function parseSessionMetadata(metadata) {
   let userData = {};
@@ -202,33 +213,29 @@ function parseSessionMetadata(metadata) {
 }
 
 async function generateQRCodeUrl(qrData) {
-  let qrCodeUrl = null;
-
   try {
-    qrCodeUrl = await QRCode.toDataURL(JSON.stringify(qrData));
+    const qrCodeUrl = await QRCode.toDataURL(JSON.stringify(qrData));
     console.log('QR Code URL generated successfully');
+    return qrCodeUrl;
   } catch (error) {
     console.error('Error generating QR code:', error);
+    throw error;
   }
+}
 
-  return qrCodeUrl;
+function generateUniqueTicketId() {
+  return '_' + Math.random().toString(36).substr(2, 9);
 }
 
 async function saveToFirestore(collectionName, docId, data) {
   try {
-    await db.collection(collectionName).doc(docId).set(data);
+    await db.runTransaction(async (transaction) => {
+      const docRef = db.collection(collectionName).doc(docId);
+      transaction.set(docRef, data);
+    });
     console.log(`Data saved to Firestore in ${collectionName} with ID: ${docId}`);
-
-    // Verify data was saved correctly
-    const savedDoc = await db.collection(collectionName).doc(docId).get();
-    if (savedDoc.exists) {
-      console.log(`Saved data in ${collectionName}:`, savedDoc.data());
-    } else {
-      console.error(`Data in ${collectionName} not saved correctly`);
-    }
   } catch (error) {
     console.error(`Error saving data to Firestore in ${collectionName}:`, error);
+    throw error;
   }
 }
-
-
