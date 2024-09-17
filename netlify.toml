@@ -7,6 +7,6 @@
   directory = "src/functions"
  
 [functions.stripe-webhook]
-  timeout = 20
+  timeout = 30
 [functions.request-refund]
   timeout = 30

@@ -44,11 +44,14 @@ function verifyStripeWebhook(event) {
 
 async function processStripeEvent(stripeEvent) {
   try {
+    console.log('Processing Stripe event:', stripeEvent.type);
     switch (stripeEvent.type) {
       case 'payment_intent.succeeded':
+        console.log('Handling payment_intent.succeeded');
         await handlePaymentIntentSucceeded(stripeEvent.data.object);
         break;
       case 'checkout.session.completed':
+        console.log('Handling checkout.session.completed');
         await handleCheckoutSessionCompleted(stripeEvent.data.object);
         break;
       default:
@@ -56,16 +59,15 @@ async function processStripeEvent(stripeEvent) {
     }
   } catch (error) {
     console.error(`Error processing Stripe event (${stripeEvent.type}):`, error);
-    throw error; // Propagate the error to be caught by the outer try/catch
+    throw error;
   }
 }
 
 async function handlePaymentIntentSucceeded(paymentIntent) {
   console.log(`PaymentIntent for ${paymentIntent.amount} was successful!`);
 
-  const paymentAmount = paymentIntent.amount / 100;
-
   try {
+    console.log('Fetching associated checkout session...');
     const sessions = await stripe.checkout.sessions.list({
       payment_intent: paymentIntent.id,
       limit: 1,
@@ -79,6 +81,7 @@ async function handlePaymentIntentSucceeded(paymentIntent) {
     const session = sessions.data[0];
     console.log('Associated session found:', session.id);
 
+    console.log('Parsing session metadata...');
     const { userData, tickets, organizerDetails } = parseSessionMetadata(session.metadata);
 
     if (!userData || !tickets.length) {
@@ -87,6 +90,7 @@ async function handlePaymentIntentSucceeded(paymentIntent) {
 
     console.log('Parsed Organizer Details:', organizerDetails);
 
+    console.log('Generating QR Code...');
     const qrCodeUrl = await generateQRCodeUrl({
       id: paymentIntent.id,
       user: userData.uid,
@@ -96,9 +100,10 @@ async function handlePaymentIntentSucceeded(paymentIntent) {
     const charge = paymentIntent.charges?.data?.[0];
     const paymentMethodDetails = charge?.payment_method_details?.card;
 
+    console.log('Preparing payment data...');
     const paymentData = {
       orderId: paymentIntent.id,  
-      amount: paymentAmount,
+      amount: paymentIntent.amount / 100,
       currency: paymentIntent.currency,
       status: paymentIntent.status,
       created: admin.firestore.Timestamp.fromDate(new Date(paymentIntent.created * 1000)),
@@ -113,7 +118,7 @@ async function handlePaymentIntentSucceeded(paymentIntent) {
       organizerId: organizerDetails.organizerId || '',
       organizerName: organizerDetails.organizer || '',
       purchaseDate: admin.firestore.Timestamp.now(),
-      totalAmountPaid: paymentAmount,
+      totalAmountPaid: paymentIntent.amount / 100,
       refund: {
         status: 'not_refunded',
         amount: null,
@@ -133,9 +138,19 @@ async function handlePaymentIntentSucceeded(paymentIntent) {
       }
     };
 
-    console.log('Payment Data to be saved:', paymentData);
+    console.log('Payment Data to be saved:', JSON.stringify(paymentData, null, 2));
 
+    console.log('Saving to Firestore...');
     await saveToFirestore('payments', paymentIntent.id, paymentData);
+    console.log('Payment data successfully saved to Firestore');
+
+    // Remove the following block of code
+    // // Update the Checkout Session with a new success_url
+    // await stripe.checkout.sessions.update(session.id, {
+    //   success_url: `${process.env.SUCCESS_URL}?payment_intent=${paymentIntent.id}`,
+    // });
+    // console.log('Checkout Session updated with new success_url');
+
   } catch (error) {
     console.error('Error processing payment intent:', error);
     throw error;
@@ -229,13 +244,15 @@ function generateUniqueTicketId() {
 
 async function saveToFirestore(collectionName, docId, data) {
   try {
+    console.log(`Attempting to save data to Firestore in ${collectionName} with ID: ${docId}`);
     await db.runTransaction(async (transaction) => {
       const docRef = db.collection(collectionName).doc(docId);
       transaction.set(docRef, data);
     });
-    console.log(`Data saved to Firestore in ${collectionName} with ID: ${docId}`);
+    console.log(`Data successfully saved to Firestore in ${collectionName} with ID: ${docId}`);
   } catch (error) {
     console.error(`Error saving data to Firestore in ${collectionName}:`, error);
+    console.error('Error details:', JSON.stringify(error, null, 2));
     throw error;
   }
 }

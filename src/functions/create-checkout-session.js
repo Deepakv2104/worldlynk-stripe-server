@@ -68,7 +68,7 @@ exports.handler = async (event) => {
         tickets: JSON.stringify(tickets),
         organizer: JSON.stringify(organizerDetails),
       },
-      success_url: process.env.SUCCESS_URL,
+      success_url: `${process.env.SUCCESS_URL}?session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: process.env.FAILURE_URL,
     });
 
