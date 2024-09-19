@@ -134,22 +134,16 @@ async function handlePaymentIntentSucceeded(paymentIntent) {
         eventTitle: userData.eventTitle,
         eventLocation: userData.eventLocation,
         eventDate: userData.eventDate,
-        eventTime: userData.eventTime
+        eventTime: userData.eventTime,
+        refunds:userData.refunds,
       }
     };
 
     console.log('Payment Data to be saved:', JSON.stringify(paymentData, null, 2));
 
     console.log('Saving to Firestore...');
-    await saveToFirestore('payments', paymentIntent.id, paymentData);
+    await saveToFirestoreWithTransaction('payments', paymentIntent.id, paymentData, 'checkouts', session.id);
     console.log('Payment data successfully saved to Firestore');
-
-    // Remove the following block of code
-    // // Update the Checkout Session with a new success_url
-    // await stripe.checkout.sessions.update(session.id, {
-    //   success_url: `${process.env.SUCCESS_URL}?payment_intent=${paymentIntent.id}`,
-    // });
-    // console.log('Checkout Session updated with new success_url');
 
   } catch (error) {
     console.error('Error processing payment intent:', error);
@@ -172,7 +166,7 @@ async function handleCheckoutSessionCompleted(session) {
     console.log('Parsed Organizer Details:', organizerDetails);
 
     const qrCodeUrl = await generateQRCodeUrl({
-      id: session.id,
+      id: session.payment_intent,
       user: userData.uid,
       tickets,
     });
@@ -196,7 +190,7 @@ async function handleCheckoutSessionCompleted(session) {
 
     console.log('Checkout Data to be saved:', checkoutData);
 
-    await saveToFirestore('checkouts', session.id, checkoutData);
+    await saveToFirestoreWithTransaction('checkouts', session.id, checkoutData, 'payments', session.payment_intent);
   } catch (error) {
     console.error('Error processing checkout session:', error);
     throw error;
@@ -242,16 +236,32 @@ function generateUniqueTicketId() {
   return '_' + Math.random().toString(36).substr(2, 9);
 }
 
-async function saveToFirestore(collectionName, docId, data) {
+async function saveToFirestoreWithTransaction(primaryCollection, primaryDocId, primaryData, secondaryCollection, secondaryDocId) {
   try {
-    console.log(`Attempting to save data to Firestore in ${collectionName} with ID: ${docId}`);
+    console.log(`Attempting to save data to Firestore in ${primaryCollection} and ${secondaryCollection}`);
     await db.runTransaction(async (transaction) => {
-      const docRef = db.collection(collectionName).doc(docId);
-      transaction.set(docRef, data);
+      const primaryDocRef = db.collection(primaryCollection).doc(primaryDocId);
+      const secondaryDocRef = db.collection(secondaryCollection).doc(secondaryDocId);
+
+      // Check if documents exist
+      const primaryDoc = await transaction.get(primaryDocRef);
+      const secondaryDoc = await transaction.get(secondaryDocRef);
+
+      if (!primaryDoc.exists) {
+        transaction.set(primaryDocRef, primaryData);
+      } else {
+        transaction.update(primaryDocRef, primaryData);
+      }
+
+      if (!secondaryDoc.exists) {
+        transaction.set(secondaryDocRef, primaryData);
+      } else {
+        transaction.update(secondaryDocRef, primaryData);
+      }
     });
-    console.log(`Data successfully saved to Firestore in ${collectionName} with ID: ${docId}`);
+    console.log(`Data successfully saved to Firestore in ${primaryCollection} and ${secondaryCollection}`);
   } catch (error) {
-    console.error(`Error saving data to Firestore in ${collectionName}:`, error);
+    console.error(`Error saving data to Firestore in ${primaryCollection} and ${secondaryCollection}:`, error);
     console.error('Error details:', JSON.stringify(error, null, 2));
     throw error;
   }
