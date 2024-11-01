@@ -13,8 +13,9 @@
 			},
 			"timezone": "Asia/Kolkata",
 			"latitude": 17.3724,
-			"longitude": 78.4378
+			"longitude": 78.4378,
+			"postalCode": "500034"
 		},
-		"timestamp": 1726579346063
+		"timestamp": 1730438330738
 	}
 }
