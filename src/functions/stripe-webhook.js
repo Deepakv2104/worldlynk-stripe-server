@@ -1,9 +1,17 @@
-const { stripe, verifyStripeWebhook } = require('./services/stripeService');
-const { processStripeEvent } = require('./services/firestoreService');
-const { corsHeaders, handleOptions } = require('./utils/cors');
+const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
+const { db, admin } = require('./firebase');
+const QRCode = require('qrcode');
+
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'POST, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type, Stripe-Signature',
+};
 
 exports.handler = async (event) => {
-  if (event.httpMethod === 'OPTIONS') return handleOptions();
+  if (event.httpMethod === 'OPTIONS') {
+    return { statusCode: 200, headers: corsHeaders, body: '' };
+  }
 
   if (event.httpMethod !== 'POST') {
     return { statusCode: 405, headers: corsHeaders, body: JSON.stringify({ error: 'Method Not Allowed' }) };
