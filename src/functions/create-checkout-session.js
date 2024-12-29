@@ -1,48 +1,9 @@
-const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
-
-
-const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'POST, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type',
-};
-
-const handleOptions = () => ({
-  statusCode: 200,
-  headers: corsHeaders,
-  body: '',
-});
-
-const validateUserDetails = (user) => {
-  const requiredFields = ['uid', 'email', 'name', 'eventId', 'eventTitle', 'eventDate', 'eventTime', 'eventLocation'];
-  for (const field of requiredFields) {
-    if (!user[field]) {
-      throw new Error(`Missing required user field: ${field}`);
-    }
-  }
-};
-
-const createLineItems = (tickets) => {
-  return tickets.map(ticket => {
-    const unitAmount = Math.round((ticket.price + ticket.bookingFee) * 100);
-    if (isNaN(unitAmount) || unitAmount <= 0) {
-      throw new Error(`Invalid unit amount calculated for ${ticket.title}`);
-    }
-    return {
-      price_data: {
-        currency: 'gbp',
-        product_data: { name: ticket.title },
-        unit_amount: unitAmount,
-      },
-      quantity: ticket.quantity,
-    };
-  });
-};
+const { stripe } = require('./services/stripeService');
+const { validateUserDetails, createLineItems } = require('./utils/validation');
+const { corsHeaders, handleOptions } = require('./utils/cors');
 
 exports.handler = async (event) => {
-  if (event.httpMethod === 'OPTIONS') {
-    return handleOptions();
-  }
+  if (event.httpMethod === 'OPTIONS') return handleOptions();
 
   if (event.httpMethod !== 'POST') {
     return {
@@ -72,6 +33,7 @@ exports.handler = async (event) => {
       success_url: `${process.env.SUCCESS_URL}?session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: process.env.FAILURE_URL,
     });
+    
 
     return {
       statusCode: 200,
@@ -83,9 +45,7 @@ exports.handler = async (event) => {
     return {
       statusCode: error.statusCode || 500,
       headers: corsHeaders,
-      body: JSON.stringify({
-        error: error.message || 'Internal Server Error',
-      }),
+      body: JSON.stringify({ error: error.message || 'Internal Server Error' }),
     };
   }
 };
