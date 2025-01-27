@@ -10,3 +10,5 @@
   timeout = 30
 [functions.request-refund]
   timeout = 30
+[functions.query-service]
+  timeout = 30
